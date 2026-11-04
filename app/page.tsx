@@ -163,6 +163,7 @@ export default function Home() {
   const [cloudReady,setCloudReady] = useState(false);
   const [prepJob,setPrepJob] = useState<Job|null>(null);
   const [restoreJobId,setRestoreJobId] = useState<number|null>(null);
+  const [localStateRestored,setLocalStateRestored] = useState(false);
   const [toast,setToast] = useState("");
   const [mobileNav,setMobileNav] = useState(false);
 
@@ -177,9 +178,10 @@ export default function Home() {
     const storedDigest=window.localStorage.getItem("matchpath-digest-settings"); if(storedDigest) setDigestSettings(JSON.parse(storedDigest));
     void refreshLiveJobs(false);
     void loadCloudState();
+    setLocalStateRestored(true);
   },[]);
-  useEffect(()=>{window.localStorage.setItem("matchpath-active-page",active)},[active]);
-  useEffect(()=>{if(selected)window.localStorage.setItem("matchpath-selected-job",String(selected.id));else window.localStorage.removeItem("matchpath-selected-job")},[selected]);
+  useEffect(()=>{if(localStateRestored)window.localStorage.setItem("matchpath-active-page",active)},[active,localStateRestored]);
+  useEffect(()=>{if(localStateRestored&&selected)window.localStorage.setItem("matchpath-selected-job",String(selected.id))},[selected,localStateRestored]);
   useEffect(()=>{
     if(!cloudReady)return;
     const timer=window.setTimeout(()=>void saveCloudState(),900);
