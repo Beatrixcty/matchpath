@@ -49,7 +49,9 @@ function isEuropeFriendly(location: string) {
 
 function leverDescription(job: Record<string, unknown>) {
   const lists = Array.isArray(job.lists) ? job.lists as Array<Record<string,unknown>> : [];
-  return [job.descriptionPlain, job.openingPlain, job.description, job.opening, ...lists.map(item => item.content)].filter(Boolean).join(" ");
+  if (job.descriptionPlain) return String(job.descriptionPlain);
+  const structured = [job.openingPlain ?? job.opening, ...lists.map(item => item.content), job.additionalPlain ?? job.additional].filter(Boolean).join(" ");
+  return structured || String(job.description ?? "");
 }
 
 function dateLabel(value: string) {

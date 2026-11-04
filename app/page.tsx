@@ -75,8 +75,9 @@ function analyseJob(job:Job,preferences:Preferences,profile:CandidateProfile){
   if(job.salary==="Salary not listed")gaps.push("The employer does not publish a salary, so compensation needs confirming early.");
   if(!gaps.length)gaps.push("The listing does not reveal an obvious blocker, but confirm location eligibility and expected seniority before applying.");
 
-  const sentences=description.split(/(?<=[.!?])\s+/).map(sentence=>sentence.trim()).filter(sentence=>sentence.length>35);
-  const needs=sentences.filter(sentence=>/(required|requirements|must|experience|proficien|familiar|strong knowledge|looking for)/i.test(sentence)).slice(0,4).map(sentence=>cleanSentence(sentence));
+  const sentences=[...new Map(description.split(/(?<=[.!?])\s+/).map(sentence=>sentence.replace(/\s+/g," ").trim()).filter(sentence=>sentence.length>35).map(sentence=>[sentence.toLowerCase().replace(/[^a-z0-9]+/g," ").trim(),sentence])).values()];
+  const requirementSentences=sentences.filter(sentence=>/(required|requirements|must|\d+\+? years?|proficien|familiar|strong (?:knowledge|skills)|experience (?:with|in)|ability to|comfortable (?:with|working)|you (?:have|bring|are))|we value/i.test(sentence));
+  const needs=[...new Set(requirementSentences.map(sentence=>cleanSentence(sentence)))].slice(0,4);
   if(!needs.length){
     if(job.skills.length)needs.push(`Technical skills mentioned: ${job.skills.join(", ")}.`);
     needs.push(`${job.contract}; ${job.schedule.toLowerCase()}.`);
