@@ -162,10 +162,14 @@ export default function Home() {
   const [cloudStatus,setCloudStatus] = useState<CloudStatus>("checking");
   const [cloudReady,setCloudReady] = useState(false);
   const [prepJob,setPrepJob] = useState<Job|null>(null);
+  const [restoreJobId,setRestoreJobId] = useState<number|null>(null);
   const [toast,setToast] = useState("");
   const [mobileNav,setMobileNav] = useState(false);
 
   useEffect(()=>{
+    const storedPage=window.localStorage.getItem("matchpath-active-page");
+    if(storedPage&&["Overview","Job matches","Applications","Profile","Daily digest","Application prep"].includes(storedPage))setActive(storedPage);
+    const storedJobId=window.localStorage.getItem("matchpath-selected-job");if(storedJobId)setRestoreJobId(Number(storedJobId));
     const stored=window.localStorage.getItem("matchpath-statuses"); if(stored) setStatuses(JSON.parse(stored));
     const storedSaved=window.localStorage.getItem("matchpath-saved"); setSaved(storedSaved?JSON.parse(storedSaved):[2]);
     const storedPreferences=window.localStorage.getItem("matchpath-preferences"); if(storedPreferences) setPreferences(mergePreferences(JSON.parse(storedPreferences)));
@@ -174,6 +178,8 @@ export default function Home() {
     void refreshLiveJobs(false);
     void loadCloudState();
   },[]);
+  useEffect(()=>{window.localStorage.setItem("matchpath-active-page",active)},[active]);
+  useEffect(()=>{if(selected)window.localStorage.setItem("matchpath-selected-job",String(selected.id));else window.localStorage.removeItem("matchpath-selected-job")},[selected]);
   useEffect(()=>{
     if(!cloudReady)return;
     const timer=window.setTimeout(()=>void saveCloudState(),900);
@@ -182,7 +188,7 @@ export default function Home() {
   const rankedJobs=useMemo(()=>liveJobs.filter(job=>passesHardFilters(job,preferences)).map(job=>{const analysis=analyseJob(job,preferences,candidateProfile);return {...job,score:scoreJob(job,preferences,candidateProfile),matches:analysis.matches,gaps:analysis.gaps}}).sort((a,b)=>b.score-a.score),[preferences,candidateProfile,liveJobs]);
   const filtered=useMemo(()=>rankedJobs.filter(job=>`${job.title} ${job.company} ${job.skills.join(" ")}`.toLowerCase().includes(query.toLowerCase())&&(focus==="All roles"||job.focus===focus)),[query,focus,rankedJobs]);
   useEffect(()=>{setSelected(current=>current?(rankedJobs.find(job=>job.id===current.id)||current):current)},[rankedJobs]);
-  useEffect(()=>{if(liveJobs.length&&!selected)setSelected(rankedJobs[0])},[liveJobs]);
+  useEffect(()=>{if(!rankedJobs.length)return;const restored=rankedJobs.find(job=>job.id===restoreJobId)||selected||rankedJobs[0];if(!selected)setSelected(restored);if(active==="Application prep"&&!prepJob)setPrepJob(restored)},[rankedJobs,restoreJobId,active,selected,prepJob]);
   function updateStatus(id:number,status:string){ const next={...statuses,[id]:status}; setStatuses(next); window.localStorage.setItem("matchpath-statuses",JSON.stringify(next)); if(!saved.includes(id)){const nextSaved=[...saved,id];setSaved(nextSaved);window.localStorage.setItem("matchpath-saved",JSON.stringify(nextSaved));} }
   function moveJob(id:number,status:string){ const next={...statuses}; if(status==="Saved") delete next[id]; else next[id]=status; setStatuses(next); window.localStorage.setItem("matchpath-statuses",JSON.stringify(next)); if(!saved.includes(id)){const nextSaved=[...saved,id];setSaved(nextSaved);window.localStorage.setItem("matchpath-saved",JSON.stringify(nextSaved));} }
   function toggleSaved(id:number){ const isRemoving=saved.includes(id); const next=isRemoving?saved.filter(savedId=>savedId!==id):[...saved,id]; setSaved(next); window.localStorage.setItem("matchpath-saved",JSON.stringify(next)); if(isRemoving){const nextStatuses={...statuses};delete nextStatuses[id];setStatuses(nextStatuses);window.localStorage.setItem("matchpath-statuses",JSON.stringify(nextStatuses));} setToast(isRemoving?"Job removed from Applications":"Job saved to Applications"); }
