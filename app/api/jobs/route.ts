@@ -35,9 +35,11 @@ function skillsFor(description: string) {
   return known.filter((skill) => description.toLowerCase().includes(skill.toLowerCase())).slice(0, 7);
 }
 
-function isRelevant(title: string, description = "") {
+function isRelevant(title: string, description = "", roles:string[] = []) {
   const combined = `${title} ${description.slice(0, 1200)}`;
-  const role = /(frontend|front-end|react|web developer|ui developer|full[ -]?stack|software engineer|software developer|ai developer|ai product|llm|generative ai|ai coding|ai trainer)/i.test(title);
+  const selected=roles.length?roles:["frontend","react","web developer","ui developer","full stack","software engineer","ai developer","ai product","llm"];
+  const synonyms:Record<string,string[]>={frontend:["frontend","front-end","react"],backend:["backend","back-end"],"full-stack":["full-stack","full stack","fullstack"],web:["web developer"],ui:["ui developer","interface developer"],mobile:["mobile","react native","ios","android"],product:["product engineer"],ai:["ai ","artificial intelligence","llm","generative ai"],ml:["machine learning","ml engineer"],data:["data analyst","data engineer"],qa:["qa","quality assurance","test engineer"],devops:["devops","site reliability","platform engineer"],designer:["designer","ux design","product design"]};
+  const role=selected.some(item=>{const lower=item.toLowerCase();const keys=Object.keys(synonyms).filter(key=>lower.includes(key));const terms=keys.length?keys.flatMap(key=>synonyms[key]):[lower.replace(/\b(developer|engineer|specialist)\b/g,"").trim()];return terms.some(term=>term&&title.toLowerCase().includes(term))});
   const juniorFriendly = !/(senior|sr\.?|staff|principal|lead|manager|director|head of|architect)/i.test(title);
   const usefulStack = /(react|javascript|typescript|frontend|front-end|web|ui|artificial intelligence|\bai\b|llm)/i.test(combined);
   return role && juniorFriendly && usefulStack;
@@ -78,9 +80,9 @@ async function fetchJson(url: string) {
   return response.json();
 }
 
-async function remotiveJobs() {
+async function remotiveJobs(roles:string[]) {
   const payload = await fetchJson(REMOTIVE_URL) as { jobs?: Array<Record<string, unknown>> };
-  return (payload.jobs ?? []).filter(job => isRelevant(String(job.title ?? ""), String(job.description ?? ""))).map(job => normalize({
+  return (payload.jobs ?? []).filter(job => isRelevant(String(job.title ?? ""), String(job.description ?? ""),roles)).map(job => normalize({
     source:"Remotive", sourceId:String(job.id), company:String(job.company_name ?? ""), title:String(job.title ?? "Developer"),
     location:String(job.candidate_required_location ?? "Worldwide"), salary:String(job.salary ?? ""),
     contract:String(job.job_type ?? "Remote role").replaceAll("_", " "), date:String(job.publication_date ?? ""),
@@ -88,9 +90,9 @@ async function remotiveJobs() {
   }));
 }
 
-async function jobicyJobs() {
+async function jobicyJobs(roles:string[]) {
   const payload = await fetchJson(JOBICY_URL) as { jobs?: Array<Record<string, unknown>> };
-  return (payload.jobs ?? []).filter(job => isRelevant(String(job.jobTitle ?? ""), String(job.jobDescription ?? ""))).map(job => normalize({
+  return (payload.jobs ?? []).filter(job => isRelevant(String(job.jobTitle ?? ""), String(job.jobDescription ?? ""),roles)).map(job => normalize({
     source:"Jobicy", sourceId:String(job.id), company:String(job.companyName ?? ""), title:String(job.jobTitle ?? "Developer"),
     location:String(job.jobGeo ?? "Europe"), salary:String(job.annualSalaryMin ?? "") && String(job.annualSalaryMax ?? "") ? `${String(job.salaryCurrency ?? "")} ${String(job.annualSalaryMin)}–${String(job.annualSalaryMax)}` : "",
     contract:Array.isArray(job.jobType) ? job.jobType.join(", ") : String(job.jobType ?? "Remote role"), date:String(job.pubDate ?? ""),
@@ -98,11 +100,11 @@ async function jobicyJobs() {
   }));
 }
 
-async function greenhouseJobs(board: string) {
+async function greenhouseJobs(board: string,roles:string[]) {
   const payload = await fetchJson(`https://boards-api.greenhouse.io/v1/boards/${board}/jobs?content=true`) as { jobs?: Array<Record<string, unknown>> };
   return (payload.jobs ?? []).filter(job => {
     const location = String((job.location as Record<string,unknown>)?.name ?? "");
-    return /remote|europe|emea|portugal|worldwide/i.test(location) && isRelevant(String(job.title ?? ""), String(job.content ?? ""));
+    return /remote|europe|emea|portugal|worldwide/i.test(location) && isRelevant(String(job.title ?? ""), String(job.content ?? ""),roles);
   }).map(job => normalize({
     source:"Greenhouse", sourceId:`${board}-${String(job.id)}`, company:board === "remotecom" ? "Remote" : board === "swordhealth" ? "Sword Health" : board.charAt(0).toUpperCase()+board.slice(1),
     title:String(job.title ?? "Developer"), location:String((job.location as Record<string,unknown>)?.name ?? "Remote"),
@@ -111,13 +113,13 @@ async function greenhouseJobs(board: string) {
   }));
 }
 
-async function leverJobs(site: string) {
+async function leverJobs(site: string,roles:string[]) {
   const payload = await fetchJson(`https://api.lever.co/v0/postings/${site}?mode=json`) as Array<Record<string, unknown>>;
   return payload.filter(job => {
     const categories = job.categories as Record<string,unknown> | undefined;
     const location = String(categories?.location ?? "");
     return (String(job.workplaceType ?? "") === "remote" || /remote/i.test(String(categories?.location ?? "")))
-      && isEuropeFriendly(location) && isRelevant(String(job.text ?? ""), leverDescription(job));
+      && isEuropeFriendly(location) && isRelevant(String(job.text ?? ""), leverDescription(job),roles);
   }).map(job => {
     const categories = job.categories as Record<string,unknown> | undefined;
     const salary = job.salaryRange as Record<string,unknown> | undefined;
@@ -129,8 +131,9 @@ async function leverJobs(site: string) {
   });
 }
 
-export async function GET() {
-  const tasks = [remotiveJobs(), jobicyJobs(), ...GREENHOUSE_BOARDS.map(greenhouseJobs), ...LEVER_SITES.map(leverJobs)];
+export async function GET(request:Request) {
+  const roles=(new URL(request.url).searchParams.get("roles")||"").split(",").map(value=>value.trim()).filter(Boolean);
+  const tasks = [remotiveJobs(roles), jobicyJobs(roles), ...GREENHOUSE_BOARDS.map(board=>greenhouseJobs(board,roles)), ...LEVER_SITES.map(site=>leverJobs(site,roles))];
   const results = await Promise.allSettled(tasks);
   const jobs = results.flatMap(result => result.status === "fulfilled" ? result.value : []);
   const unique = [...new Map(jobs.map(job => [`${job.company.toLowerCase()}|${job.title.toLowerCase()}`, job])).values()].slice(0, 80);
