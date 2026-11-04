@@ -38,6 +38,7 @@ type CandidateProfile = { title:string; summary:string; skills:string; projects:
 const defaultCandidateProfile: CandidateProfile = { title:"Junior Frontend and AI Product Developer", summary:"Frontend developer building responsive React applications with APIs, cloud data and AI-assisted features. Former translator with a strong interest in multilingual user experiences.", skills:"React, JavaScript, HTML, CSS, responsive design, REST APIs, Supabase, Git, GitHub", projects:"HoneyGlow Fitness Platform, Honey Decode, Travel Portfolio", languages:"English (fluent), Cantonese (native), Mandarin (fluent)" };
 type DigestSettings = { enabled:boolean; frequency:"Daily"|"Weekly"; time:string; timezone:string; minScore:number; maxJobs:number; newOnly:boolean; email:string };
 const defaultDigestSettings: DigestSettings = { enabled:true,frequency:"Daily",time:"08:00",timezone:"Europe/Athens",minScore:80,maxJobs:5,newOnly:true,email:"" };
+type CloudStatus = "checking" | "signed-out" | "synced" | "saving" | "error";
 const jobIndustries: Record<number,string> = {1:"language tech education",2:"health fitness AI products",3:"travel",4:"education",5:"finance"};
 
 function scoreJob(job:Job,preferences:Preferences,profile:CandidateProfile){
@@ -105,6 +106,8 @@ export default function Home() {
   const [liveJobs,setLiveJobs] = useState<Job[]>([]);
   const [searching,setSearching] = useState(false);
   const [lastLiveSearch,setLastLiveSearch] = useState("");
+  const [cloudStatus,setCloudStatus] = useState<CloudStatus>("checking");
+  const [cloudReady,setCloudReady] = useState(false);
   const [toast,setToast] = useState("");
   const [showDescription,setShowDescription] = useState(false);
   const [mobileNav,setMobileNav] = useState(false);
@@ -116,7 +119,13 @@ export default function Home() {
     const storedProfile=window.localStorage.getItem("matchpath-candidate-profile"); if(storedProfile) setCandidateProfile(JSON.parse(storedProfile));
     const storedDigest=window.localStorage.getItem("matchpath-digest-settings"); if(storedDigest) setDigestSettings(JSON.parse(storedDigest));
     void refreshLiveJobs(false);
+    void loadCloudState();
   },[]);
+  useEffect(()=>{
+    if(!cloudReady)return;
+    const timer=window.setTimeout(()=>void saveCloudState(),900);
+    return()=>window.clearTimeout(timer);
+  },[preferences,candidateProfile,digestSettings,saved,statuses,cloudReady]);
   const rankedJobs=useMemo(()=>(liveJobs.length?liveJobs:jobs).map(job=>({...job,score:scoreJob(job,preferences,candidateProfile)})).sort((a,b)=>b.score-a.score),[preferences,candidateProfile,liveJobs]);
   const filtered=useMemo(()=>rankedJobs.filter(job=>`${job.title} ${job.company} ${job.skills.join(" ")}`.toLowerCase().includes(query.toLowerCase())&&(focus==="All roles"||job.focus===focus)),[query,focus,rankedJobs]);
   useEffect(()=>{if(selected){const refreshed=rankedJobs.find(job=>job.id===selected.id);if(refreshed&&refreshed.score!==selected.score)setSelected(refreshed)}},[rankedJobs]);
@@ -136,6 +145,15 @@ export default function Home() {
     catch{setToast("Live jobs unavailable — showing demo listings")}
     finally{setSearching(false)}
   }
+  async function loadCloudState(){
+    try{const response=await fetch("/api/state");if(response.status===401){setCloudStatus("signed-out");return}if(!response.ok)throw new Error();const data=await response.json();if(data.state){const state=data.state;if(state.preferences){setPreferences(state.preferences);window.localStorage.setItem("matchpath-preferences",JSON.stringify(state.preferences))}if(state.candidateProfile){setCandidateProfile(state.candidateProfile);window.localStorage.setItem("matchpath-candidate-profile",JSON.stringify(state.candidateProfile))}if(state.digestSettings){setDigestSettings(state.digestSettings);window.localStorage.setItem("matchpath-digest-settings",JSON.stringify(state.digestSettings))}if(state.saved){setSaved(state.saved);window.localStorage.setItem("matchpath-saved",JSON.stringify(state.saved))}if(state.statuses){setStatuses(state.statuses);window.localStorage.setItem("matchpath-statuses",JSON.stringify(state.statuses))}}setCloudStatus("synced");setCloudReady(true)}
+    catch{setCloudStatus("error")}
+  }
+  async function saveCloudState(){
+    setCloudStatus("saving");
+    try{const response=await fetch("/api/state",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({preferences,candidateProfile,digestSettings,saved,statuses})});if(response.status===401){setCloudStatus("signed-out");return}if(!response.ok)throw new Error();setCloudStatus("synced")}
+    catch{setCloudStatus("error")}
+  }
 
   return <main className="app-shell">
     <aside className={`sidebar ${mobileNav?"open":""}`}>
@@ -147,7 +165,7 @@ export default function Home() {
       <div className="sidebar-foot"><div className="profile-mini"><span>BC</span><div><strong>Beatrix</strong><small>Private workspace</small></div></div><div className="demo-note"><Sparkles size={16}/><p><strong>Live + demo mode</strong><br/>Real jobs show their source. Samples are labelled.</p></div></div>
     </aside>
     <section className="main-panel">
-      <header className="topbar"><button className="mobile-menu" onClick={()=>setMobileNav(true)} aria-label="Open menu"><span/><span/><span/></button><div className="mobile-brand">MatchPath</div><div className="top-actions"><button className="icon-button" aria-label="Notifications"><Bell size={18}/><i/></button><button className="avatar">BC</button></div></header>
+      <header className="topbar"><button className="mobile-menu" onClick={()=>setMobileNav(true)} aria-label="Open menu"><span/><span/><span/></button><div className="mobile-brand">MatchPath</div><div className="top-actions">{cloudStatus==="signed-out"?<a className="cloud-pill sign-in" href="/signin-with-chatgpt?return_to=%2F" target="_top">Enable cloud sync</a>:<span className={`cloud-pill ${cloudStatus}`}><i/>{cloudStatus==="checking"?"Checking cloud":cloudStatus==="saving"?"Saving…":cloudStatus==="synced"?"Cloud synced":"Cloud unavailable"}</span>}<button className="icon-button" aria-label="Notifications"><Bell size={18}/><i/></button><button className="avatar">BC</button></div></header>
       {active==="Job matches"?<div className="content">
         <section className="page-heading"><div><p className="eyebrow">YOUR OPPORTUNITIES</p><h1>Job matches</h1><p>Remote roles ranked against your experience, goals and working preferences.</p></div><button className="primary-button" disabled={searching} onClick={()=>void refreshLiveJobs(true)}><Sparkles size={17}/>{searching?"Searching…":"Find new matches"}</button></section>
         <section className="summary-strip"><div><span className="summary-icon lavender"><Target size={20}/></span><p><strong>{rankedJobs.length}</strong><small>{liveJobs.length?"Live matches":"Demo matches"}</small></p></div><div><span className="summary-icon green"><Sparkles size={20}/></span><p><strong>{rankedJobs.filter(job=>job.score>=80).length}</strong><small>Strong matches</small></p></div><div><span className="summary-icon amber"><Clock3 size={20}/></span><p><strong>{lastLiveSearch?"Today":"Demo"}</strong><small>Last search</small></p></div><p className="digest"><Check size={15}/> {liveJobs.length?"Live source: Remotive":"Showing fictional samples"}</p></section>
