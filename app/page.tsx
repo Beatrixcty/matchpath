@@ -47,7 +47,8 @@ function scoreJob(job:Job,preferences:Preferences,profile:CandidateProfile){
   if(industryText.split(/\W+/).some(word=>word.length>3&&industries.includes(word)))score+=12;
   if(industryText.split(/\W+/).some(word=>word.length>3&&lowPriority.includes(word)))score-=6;
   if(industryText.split(/\W+/).some(word=>word.length>3&&avoided.includes(word)))score-=20;
-  if(preferences.location.toLowerCase().includes("remote")&&job.location.toLowerCase().includes("remote"))score+=10;
+  if(preferences.location.toLowerCase().includes("worldwide")&&/(worldwide|anywhere|global)/i.test(job.location))score+=12;
+  else if(job.location.toLowerCase().includes("remote"))score+=5;
   if(job.schedule.toLowerCase().includes("european")&&preferences.hours.toLowerCase().includes("european"))score+=8; else if(job.schedule.toLowerCase().includes("overlap"))score+=4;
   if(parseInt(job.salary.replace(/\D/g,""),10)>=20)score+=5;
   if(preferences.contract.toLowerCase().includes(job.contract.toLowerCase()))score+=5;
@@ -199,10 +200,10 @@ export default function Home() {
   function saveDigest(next:DigestSettings){ setDigestSettings(next); window.localStorage.setItem("matchpath-digest-settings",JSON.stringify(next)); setToast("Daily Digest settings saved locally"); }
   async function extractCv(file:File){const extracted=await extractCandidateProfile(file,candidateProfile);setToast("CV extracted — review the fields and save your profile");return extracted;}
   async function refreshLiveJobs(force:boolean,searchPreferences=preferences){
-    const cacheKey=`matchpath-live-jobs-v3-${searchPreferences.roles.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,80)}`;
+    const cacheKey=`matchpath-live-jobs-v4-${`${searchPreferences.roles}-${searchPreferences.location}`.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,140)}`;
     if(!force){const cached=window.localStorage.getItem(cacheKey);if(cached){try{const parsed=JSON.parse(cached);if(Date.now()-parsed.savedAt<6*60*60*1000&&parsed.jobs?.length){setLiveJobs(parsed.jobs);setLiveSources(parsed.sources||[]);setLastLiveSearch(parsed.fetchedAt);return}}catch{}}}
     setSearching(true);
-    try{const roleQuery=encodeURIComponent(searchPreferences.roles);const response=await fetch(`/api/jobs?roles=${roleQuery}`);if(!response.ok)throw new Error("Live search is temporarily unavailable");const data=await response.json();if(data.jobs?.length){setLiveJobs(data.jobs);setLiveSources(data.sources||[]);setLastLiveSearch(data.fetchedAt);window.localStorage.setItem(cacheKey,JSON.stringify({jobs:data.jobs,sources:data.sources||[],fetchedAt:data.fetchedAt,savedAt:Date.now()}));setToast(`${data.jobs.length} real jobs loaded from ${(data.sources||[]).join(", ")}`)}else{setLiveJobs([]);setLiveSources([]);setToast("No suitable live jobs found right now")}}
+    try{const roleQuery=encodeURIComponent(searchPreferences.roles);const locationQuery=encodeURIComponent(searchPreferences.location);const response=await fetch(`/api/jobs?roles=${roleQuery}&locations=${locationQuery}`);if(!response.ok)throw new Error("Live search is temporarily unavailable");const data=await response.json();if(data.jobs?.length){setLiveJobs(data.jobs);setLiveSources(data.sources||[]);setLastLiveSearch(data.fetchedAt);window.localStorage.setItem(cacheKey,JSON.stringify({jobs:data.jobs,sources:data.sources||[],fetchedAt:data.fetchedAt,savedAt:Date.now()}));setToast(`${data.jobs.length} location-compatible jobs loaded from ${(data.sources||[]).join(", ")}`)}else{setLiveJobs([]);setLiveSources([]);setToast("No suitable live jobs found for the selected locations right now")}}
     catch{setLiveJobs([]);setLiveSources([]);setToast("Live job sources are temporarily unavailable — please try again")}
     finally{setSearching(false)}
   }

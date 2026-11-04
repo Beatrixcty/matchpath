@@ -1,5 +1,4 @@
 const REMOTIVE_URL = "https://remotive.com/api/remote-jobs?category=software-dev&limit=100";
-const JOBICY_URL = "https://jobicy.com/api/jobs?count=100&geo=europe&industry=engineering";
 const GREENHOUSE_BOARDS = ["duolingo", "coursera", "swordhealth", "remotecom"];
 const LEVER_SITES = ["masterborn-2", "jobgether"];
 
@@ -45,8 +44,27 @@ function isRelevant(title: string, description = "", roles:string[] = []) {
   return role && juniorFriendly && usefulStack;
 }
 
-function isEuropeFriendly(location: string) {
-  return /(europe|emea|worldwide|anywhere|portugal|spain|france|germany|italy|netherlands|ireland|united kingdom|\buk\b|switzerland|romania|poland|wrocław|bulgaria|croatia|luxembourg|norway|czech|finland|hungary|estonia|austria|belgium|sweden|denmark|greece)/i.test(location);
+function isWorldwide(location:string){return /(worldwide|anywhere|global|all countries|work from anywhere)/i.test(location)}
+function locationCompatible(location:string,selected:string[]){
+  if(!selected.length)return true;
+  const value=location.toLowerCase();
+  if(isWorldwide(value))return true;
+  if(selected.includes("europe")&&/(europe|emea|eu\/eea|european union|portugal|spain|france|germany|italy|netherlands|ireland|united kingdom|\buk\b|switzerland|romania|poland|bulgaria|croatia|luxembourg|norway|czech|finland|hungary|estonia|austria|belgium|sweden|denmark|greece)/i.test(value))return true;
+  if(selected.includes("eu/eea")&&/(eu\/eea|european union|\beu\b|eea|portugal|spain|france|germany|italy|netherlands|ireland|romania|poland|bulgaria|croatia|luxembourg|norway|czech|finland|hungary|estonia|austria|belgium|sweden|denmark|greece)/i.test(value))return true;
+  if(selected.includes("portugal")&&/portugal/i.test(value))return true;
+  if(selected.includes("uk")&&/(united kingdom|\buk\b|britain)/i.test(value))return true;
+  if(selected.includes("north america")&&/(north america|united states|\busa\b|\bu\.s\.|canada|mexico)/i.test(value))return true;
+  if(selected.includes("asia-pacific")&&/(asia|apac|asia-pacific|australia|new zealand|singapore|hong kong|japan|korea|india)/i.test(value))return true;
+  return /^(remote|remote only|fully remote)$/i.test(value.trim());
+}
+function eligibilityPriority(location:string){return isWorldwide(location)?0:/^(remote|remote only|fully remote)$/i.test(location.trim())?2:1}
+function jobicyGeos(selected:string[]){
+  const geos:string[]=[];
+  if(selected.includes("worldwide"))geos.push("anywhere");
+  if(selected.some(value=>["europe","eu/eea","portugal","uk"].includes(value)))geos.push("europe");
+  if(selected.includes("north america"))geos.push("usa","canada");
+  if(selected.includes("asia-pacific"))geos.push("apac");
+  return geos.length?[...new Set(geos)]:[""];
 }
 
 function leverDescription(job: Record<string, unknown>) {
@@ -80,9 +98,9 @@ async function fetchJson(url: string) {
   return response.json();
 }
 
-async function remotiveJobs(roles:string[]) {
+async function remotiveJobs(roles:string[],locations:string[]) {
   const payload = await fetchJson(REMOTIVE_URL) as { jobs?: Array<Record<string, unknown>> };
-  return (payload.jobs ?? []).filter(job => isRelevant(String(job.title ?? ""), String(job.description ?? ""),roles)).map(job => normalize({
+  return (payload.jobs ?? []).filter(job => locationCompatible(String(job.candidate_required_location ?? "Remote"),locations)&&isRelevant(String(job.title ?? ""), String(job.description ?? ""),roles)).map(job => normalize({
     source:"Remotive", sourceId:String(job.id), company:String(job.company_name ?? ""), title:String(job.title ?? "Developer"),
     location:String(job.candidate_required_location ?? "Worldwide"), salary:String(job.salary ?? ""),
     contract:String(job.job_type ?? "Remote role").replaceAll("_", " "), date:String(job.publication_date ?? ""),
@@ -90,9 +108,10 @@ async function remotiveJobs(roles:string[]) {
   }));
 }
 
-async function jobicyJobs(roles:string[]) {
-  const payload = await fetchJson(JOBICY_URL) as { jobs?: Array<Record<string, unknown>> };
-  return (payload.jobs ?? []).filter(job => isRelevant(String(job.jobTitle ?? ""), String(job.jobDescription ?? ""),roles)).map(job => normalize({
+async function jobicyJobs(roles:string[],locations:string[],geo:string) {
+  const geoQuery=geo?`&geo=${encodeURIComponent(geo)}`:"";
+  const payload = await fetchJson(`https://jobicy.com/api/jobs?count=100${geoQuery}&industry=engineering`) as { jobs?: Array<Record<string, unknown>> };
+  return (payload.jobs ?? []).filter(job => locationCompatible(String(job.jobGeo ?? "Remote"),locations)&&isRelevant(String(job.jobTitle ?? ""), String(job.jobDescription ?? ""),roles)).map(job => normalize({
     source:"Jobicy", sourceId:String(job.id), company:String(job.companyName ?? ""), title:String(job.jobTitle ?? "Developer"),
     location:String(job.jobGeo ?? "Europe"), salary:String(job.annualSalaryMin ?? "") && String(job.annualSalaryMax ?? "") ? `${String(job.salaryCurrency ?? "")} ${String(job.annualSalaryMin)}–${String(job.annualSalaryMax)}` : "",
     contract:Array.isArray(job.jobType) ? job.jobType.join(", ") : String(job.jobType ?? "Remote role"), date:String(job.pubDate ?? ""),
@@ -100,11 +119,11 @@ async function jobicyJobs(roles:string[]) {
   }));
 }
 
-async function greenhouseJobs(board: string,roles:string[]) {
+async function greenhouseJobs(board: string,roles:string[],locations:string[]) {
   const payload = await fetchJson(`https://boards-api.greenhouse.io/v1/boards/${board}/jobs?content=true`) as { jobs?: Array<Record<string, unknown>> };
   return (payload.jobs ?? []).filter(job => {
     const location = String((job.location as Record<string,unknown>)?.name ?? "");
-    return /remote|europe|emea|portugal|worldwide/i.test(location) && isRelevant(String(job.title ?? ""), String(job.content ?? ""),roles);
+    return /remote/i.test(location) && locationCompatible(location,locations) && isRelevant(String(job.title ?? ""), String(job.content ?? ""),roles);
   }).map(job => normalize({
     source:"Greenhouse", sourceId:`${board}-${String(job.id)}`, company:board === "remotecom" ? "Remote" : board === "swordhealth" ? "Sword Health" : board.charAt(0).toUpperCase()+board.slice(1),
     title:String(job.title ?? "Developer"), location:String((job.location as Record<string,unknown>)?.name ?? "Remote"),
@@ -113,13 +132,13 @@ async function greenhouseJobs(board: string,roles:string[]) {
   }));
 }
 
-async function leverJobs(site: string,roles:string[]) {
+async function leverJobs(site: string,roles:string[],locations:string[]) {
   const payload = await fetchJson(`https://api.lever.co/v0/postings/${site}?mode=json`) as Array<Record<string, unknown>>;
   return payload.filter(job => {
     const categories = job.categories as Record<string,unknown> | undefined;
     const location = String(categories?.location ?? "");
     return (String(job.workplaceType ?? "") === "remote" || /remote/i.test(String(categories?.location ?? "")))
-      && isEuropeFriendly(location) && isRelevant(String(job.text ?? ""), leverDescription(job),roles);
+      && locationCompatible(location,locations) && isRelevant(String(job.text ?? ""), leverDescription(job),roles);
   }).map(job => {
     const categories = job.categories as Record<string,unknown> | undefined;
     const salary = job.salaryRange as Record<string,unknown> | undefined;
@@ -132,11 +151,13 @@ async function leverJobs(site: string,roles:string[]) {
 }
 
 export async function GET(request:Request) {
-  const roles=(new URL(request.url).searchParams.get("roles")||"").split(",").map(value=>value.trim()).filter(Boolean);
-  const tasks = [remotiveJobs(roles), jobicyJobs(roles), ...GREENHOUSE_BOARDS.map(board=>greenhouseJobs(board,roles)), ...LEVER_SITES.map(site=>leverJobs(site,roles))];
+  const params=new URL(request.url).searchParams;
+  const roles=(params.get("roles")||"").split(",").map(value=>value.trim()).filter(Boolean);
+  const locations=(params.get("locations")||"").split(",").map(value=>value.trim().toLowerCase()).filter(Boolean);
+  const tasks = [remotiveJobs(roles,locations), ...jobicyGeos(locations).map(geo=>jobicyJobs(roles,locations,geo)), ...GREENHOUSE_BOARDS.map(board=>greenhouseJobs(board,roles,locations)), ...LEVER_SITES.map(site=>leverJobs(site,roles,locations))];
   const results = await Promise.allSettled(tasks);
   const jobs = results.flatMap(result => result.status === "fulfilled" ? result.value : []);
-  const unique = [...new Map(jobs.map(job => [`${job.company.toLowerCase()}|${job.title.toLowerCase()}`, job])).values()].slice(0, 80);
+  const unique = [...new Map(jobs.map(job => [`${job.company.toLowerCase()}|${job.title.toLowerCase()}`, job])).values()].sort((a,b)=>eligibilityPriority(a.location)-eligibilityPriority(b.location)).slice(0, 80);
   const sources = [...new Set(unique.map(job => job.source))];
   if (!unique.length) return Response.json({ jobs: [], sources: [], error: "No suitable live jobs were returned by the connected sources." }, { status: 503 });
   return Response.json({ jobs: unique, sources, fetchedAt: new Date().toISOString() }, { headers: { "Cache-Control": "public, max-age=900, s-maxage=21600" } });
