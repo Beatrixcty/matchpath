@@ -1,6 +1,8 @@
 const REMOTIVE_URL = "https://remotive.com/api/remote-jobs?category=software-dev&limit=100";
 const GREENHOUSE_BOARDS = ["duolingo", "coursera", "swordhealth", "remotecom"];
 const LEVER_SITES = ["masterborn-2", "jobgether"];
+const WWR_FEEDS = ["remote-programming-jobs", "remote-product-jobs", "remote-design-jobs"];
+const ASHBY_BOARDS = ["speak", "elevenlabs", "deepgram"];
 
 type NormalizedJob = {
   id: number; company: string; title: string; location: string; schedule: string;
@@ -98,6 +100,16 @@ async function fetchJson(url: string) {
   return response.json();
 }
 
+async function fetchText(url:string){
+  const response=await fetch(url,{signal:AbortSignal.timeout(15000),headers:{Accept:"application/rss+xml, application/xml, text/xml","User-Agent":"MatchPath/1.0 job discovery tool"}});
+  if(!response.ok)throw new Error(`${new URL(url).hostname} returned ${response.status}`);return response.text();
+}
+
+function xmlValue(item:string,tag:string){
+  const value=item.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`,"i"))?.[1]||"";
+  return value.replace(/^<!\[CDATA\[|\]\]>$/g,"").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&amp;/g,"&").replace(/&quot;/g,'"').replace(/&#39;|&apos;/g,"'").trim();
+}
+
 async function remotiveJobs(roles:string[],locations:string[]) {
   const payload = await fetchJson(REMOTIVE_URL) as { jobs?: Array<Record<string, unknown>> };
   return (payload.jobs ?? []).filter(job => locationCompatible(String(job.candidate_required_location ?? "Remote"),locations)&&isRelevant(String(job.title ?? ""), String(job.description ?? ""),roles)).map(job => normalize({
@@ -116,6 +128,39 @@ async function jobicyJobs(roles:string[],locations:string[],geo:string) {
     location:String(job.jobGeo ?? "Europe"), salary:String(job.annualSalaryMin ?? "") && String(job.annualSalaryMax ?? "") ? `${String(job.salaryCurrency ?? "")} ${String(job.annualSalaryMin)}–${String(job.annualSalaryMax)}` : "",
     contract:Array.isArray(job.jobType) ? job.jobType.join(", ") : String(job.jobType ?? "Remote role"), date:String(job.pubDate ?? ""),
     url:String(job.url ?? ""), description:String(job.jobDescription ?? job.jobExcerpt ?? ""), color:"#ef6c57",
+  }));
+}
+
+async function remoteOkJobs(roles:string[],locations:string[]){
+  const payload=await fetchJson("https://remoteok.com/api?tag=dev") as Array<Record<string,unknown>>;
+  return payload.filter(job=>job.id&&locationCompatible(String(job.location||"Worldwide"),locations)&&isRelevant(String(job.position||""),String(job.description||""),roles)).map(job=>normalize({
+    source:"Remote OK",sourceId:String(job.id),company:String(job.company||""),title:String(job.position||"Developer"),location:String(job.location||"Worldwide"),
+    salary:job.salary_min&&job.salary_max?`USD ${String(job.salary_min)}–${String(job.salary_max)}`:"",contract:"Remote role",date:String(job.date||job.epoch||""),
+    url:String(job.url||`https://remoteok.com/remote-jobs/${String(job.slug||job.id)}`),description:String(job.description||""),color:"#111827",
+  }));
+}
+
+async function arbeitnowJobs(roles:string[],locations:string[]){
+  const payload=await fetchJson("https://www.arbeitnow.com/api/job-board-api?remote=true") as {data?:Array<Record<string,unknown>>};
+  return (payload.data||[]).filter(job=>Boolean(job.remote)&&locationCompatible(String(job.location||"Europe"),locations)&&isRelevant(String(job.title||""),String(job.description||""),roles)).map(job=>normalize({
+    source:"Arbeitnow",sourceId:String(job.slug||job.url),company:String(job.company_name||""),title:String(job.title||"Developer"),location:String(job.location||"Europe"),
+    contract:Array.isArray(job.job_types)?job.job_types.join(", "):"Remote role",date:String(job.created_at||""),url:String(job.url||""),description:String(job.description||""),color:"#e14d2a",
+  }));
+}
+
+async function weWorkRemotelyJobs(feed:string,roles:string[],locations:string[]){
+  const xml=await fetchText(`https://weworkremotely.com/categories/${feed}.rss`);
+  const items=[...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)].map(match=>match[1]);
+  return items.flatMap(item=>{const combinedTitle=xmlValue(item,"title");const divider=combinedTitle.indexOf(":");const company=divider>0?combinedTitle.slice(0,divider).trim():"Company";const title=divider>0?combinedTitle.slice(divider+1).replace(/\s+-\s+Remote\s*$/i,"").trim():combinedTitle;const description=xmlValue(item,"description");const location=xmlValue(item,"region")||xmlValue(item,"country")||"Worldwide";if(!locationCompatible(location,locations)||!isRelevant(title,description,roles))return [];return [normalize({source:"We Work Remotely",sourceId:xmlValue(item,"guid")||xmlValue(item,"link"),company,title,location,contract:xmlValue(item,"type")||"Remote role",date:xmlValue(item,"pubDate"),url:xmlValue(item,"link"),description,color:"#4f46e5"})]});
+}
+
+async function ashbyJobs(board:string,roles:string[],locations:string[]){
+  const payload=await fetchJson(`https://api.ashbyhq.com/posting-api/job-board/${board}?includeCompensation=true`) as {jobs?:Array<Record<string,unknown>>};
+  const companies:Record<string,string>={speak:"Speak",elevenlabs:"ElevenLabs",deepgram:"Deepgram"};
+  return (payload.jobs||[]).filter(job=>job.isListed!==false&&(job.workplaceType==="Remote"||/remote/i.test(String(job.location||"")))&&locationCompatible(String(job.location||"Remote"),locations)&&isRelevant(String(job.title||""),String(job.descriptionHtml||job.descriptionPlain||""),roles)).map(job=>normalize({
+    source:"Ashby",sourceId:`${board}-${String(job.id)}`,company:companies[board]||board,title:String(job.title||"Developer"),location:String(job.location||"Remote"),
+    contract:String(job.employmentType||"Remote role").replace(/([a-z])([A-Z])/g,"$1 $2"),date:String(job.publishedAt||""),url:String(job.jobUrl||job.applyUrl||""),
+    description:String(job.descriptionHtml||job.descriptionPlain||""),salary:String(job.compensationTierSummary||""),color:"#6366f1",
   }));
 }
 
@@ -155,7 +200,7 @@ export async function GET(request:Request) {
   const forceRefresh=params.has("refresh");
   const roles=(params.get("roles")||"").split(",").map(value=>value.trim()).filter(Boolean);
   const locations=(params.get("locations")||"").split(",").map(value=>value.trim().toLowerCase()).filter(Boolean);
-  const tasks = [remotiveJobs(roles,locations), ...jobicyGeos(locations).map(geo=>jobicyJobs(roles,locations,geo)), ...GREENHOUSE_BOARDS.map(board=>greenhouseJobs(board,roles,locations)), ...LEVER_SITES.map(site=>leverJobs(site,roles,locations))];
+  const tasks = [remotiveJobs(roles,locations),remoteOkJobs(roles,locations),arbeitnowJobs(roles,locations),...WWR_FEEDS.map(feed=>weWorkRemotelyJobs(feed,roles,locations)),...jobicyGeos(locations).map(geo=>jobicyJobs(roles,locations,geo)),...GREENHOUSE_BOARDS.map(board=>greenhouseJobs(board,roles,locations)),...LEVER_SITES.map(site=>leverJobs(site,roles,locations)),...ASHBY_BOARDS.map(board=>ashbyJobs(board,roles,locations))];
   const results = await Promise.allSettled(tasks);
   const jobs = results.flatMap(result => result.status === "fulfilled" ? result.value : []);
   const unique = [...new Map(jobs.map(job => [`${job.company.toLowerCase()}|${job.title.toLowerCase()}`, job])).values()].sort((a,b)=>eligibilityPriority(a.location)-eligibilityPriority(b.location)).slice(0, 80);
