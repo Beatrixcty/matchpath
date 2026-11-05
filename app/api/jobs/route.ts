@@ -89,7 +89,7 @@ function normalize(input: { source:string; sourceId:string; company:string; titl
     schedule: input.schedule || "Remote hours vary", salary: input.salary || "Salary not listed",
     contract: input.contract || "Remote role", posted: dateLabel(input.date || ""), score: 0,
     focus: focusFor(`${input.title} ${description}`), logo: (input.company || "C").charAt(0).toUpperCase(), color: input.color,
-    summary: description.slice(0, 240) + (description.length > 240 ? "…" : ""), matches: [], gaps: [], skills: skillsFor(description),
+    summary: description, matches: [], gaps: [], skills: skillsFor(description),
     source: input.source, sourceUrl: input.url, isDemo: false, originalDescription: description,
   };
 }

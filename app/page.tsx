@@ -2,11 +2,10 @@
 
 import {
   ArrowUpRight, Bell, BriefcaseBusiness, Check, ChevronDown,
-  CircleUserRound, Clock3, Compass, Filter, Heart, LayoutDashboard,
+  CircleUserRound, Clock3, Compass, Filter, Heart,
   MapPin, Search, Sparkles, Target, X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Job = {
   id: number; company: string; title: string; location: string; schedule: string;
@@ -15,6 +14,7 @@ type Job = {
   summary: string; matches: string[]; gaps: string[]; skills: string[];
   source?: string; sourceUrl?: string; isDemo?: boolean; originalDescription?: string; isNew?: boolean;
 };
+type JobSummary = { companyDoes:string; jobPurpose:string; dailyWork:string[]; requirements:string[] };
 
 type Preferences = { roles:string; seniority:string; industries:string; lowPriorityIndustries:string; avoidedIndustries:string; location:string; arrangements:string; hours:string; salary:string; contract:string; exclusions:string };
 const defaultPreferences: Preferences = { roles:"AI Product Developer, Frontend Developer, Junior Web Developer, UI Developer", seniority:"Internship, Graduate, Entry-level, Junior", industries:"AI products, Language tech, Health & fitness, Travel, Education", lowPriorityIndustries:"Finance, Cryptocurrency", avoidedIndustries:"", location:"Worldwide, Europe, EU/EEA, Portugal", arrangements:"Remote", hours:"European hours, Asynchronous, US East overlap, Asia overlap", salary:"€26,000 target · €20,000 soft minimum", contract:"Permanent, Contract, Freelance", exclusions:"Senior, Staff, Principal, Lead, Manager, Director, Commission-only, Unpaid" };
@@ -31,7 +31,6 @@ type CandidateProfile = { title:string; summary:string; skills:string; projects:
 const defaultCandidateProfile: CandidateProfile = { title:"Junior Frontend and AI Product Developer", summary:"Frontend developer building responsive React applications with APIs, cloud data and AI-assisted features. Former translator with a strong interest in multilingual user experiences.", skills:"React, JavaScript, HTML, CSS, responsive design, REST APIs, Supabase, Git, GitHub", projects:"HoneyGlow Fitness Platform, Honey Decode, Travel Portfolio", languages:"English (fluent), Cantonese (native), Mandarin (fluent)" };
 type DigestSettings = { enabled:boolean; frequency:"Daily"|"Weekly"; time:string; timezone:string; minScore:number; maxJobs:number; newOnly:boolean; email:string };
 const defaultDigestSettings: DigestSettings = { enabled:true,frequency:"Daily",time:"08:00",timezone:"Europe/Athens",minScore:80,maxJobs:5,newOnly:true,email:"" };
-type CloudStatus = "checking" | "signed-out" | "synced" | "saving" | "error";
 function scoreJob(job:Job,preferences:Preferences,profile:CandidateProfile){
   const roles=preferences.roles.toLowerCase();
   const industries=preferences.industries.toLowerCase();
@@ -63,16 +62,46 @@ function scoreJob(job:Job,preferences:Preferences,profile:CandidateProfile){
 function passesHardFilters(job:Job,preferences:Preferences){
   const text=`${job.title} ${job.location} ${job.contract}`.toLowerCase();
   const exclusions=preferences.exclusions.split(",").map(value=>value.trim().toLowerCase()).filter(Boolean);
+  const locations=preferences.location.split(",").map(value=>value.trim().toLowerCase()).filter(Boolean);
+  const location=job.location.toLowerCase();
   if(exclusions.some(term=>text.includes(term)))return false;
   if(preferences.arrangements.toLowerCase().includes("remote")&&!preferences.arrangements.toLowerCase().includes("hybrid")&&!job.location.toLowerCase().includes("remote"))return false;
+  if(locations.length){
+    const allowed=/(worldwide|anywhere|global|all countries|work from anywhere)/i.test(location)||/^(remote|remote only|fully remote)$/i.test(location.trim())
+      ||(locations.includes("europe")&&/(europe|emea|eu\/eea|european union|portugal|spain|france|germany|italy|netherlands|ireland|united kingdom|\buk\b|greece)/i.test(location))
+      ||(locations.includes("eu/eea")&&/(eu\/eea|european union|\beu\b|eea|portugal|spain|france|germany|italy|netherlands|ireland|greece)/i.test(location))
+      ||(locations.includes("portugal")&&/portugal/i.test(location))
+      ||(locations.includes("uk")&&/(united kingdom|\buk\b|britain)/i.test(location))
+      ||(locations.includes("north america")&&/(north america|united states|\busa\b|\bu\.s\.|canada|mexico)/i.test(location))
+      ||(locations.includes("asia-pacific")&&/(asia|apac|asia-pacific|australia|new zealand|singapore|hong kong|japan|korea|india)/i.test(location));
+    if(!allowed)return false;
+  }
   return true;
 }
 
-function cleanSentence(value:string,max=190){
-  const clean=value.replace(/\s+/g," ").trim();
-  if(clean.length<=max)return clean;
-  const shortened=clean.slice(0,max);
-  return `${shortened.slice(0,Math.max(shortened.lastIndexOf(" "),120))}…`;
+function concisePoint(value:string){
+  const clean=value
+    .replace(/^[\s•*-]+/,"")
+    .replace(/^(?:about (?:the role|you)|the role|your (?:role|responsibilities)|responsibilities|what you(?:'|’)ll do|requirements|qualifications)\s*:?\s*/i,"")
+    .replace(/^(?:you(?:'|’)ll|you will|you would|the successful candidate will|the ideal candidate will)\s+/i,"")
+    .replace(/^(?:we(?:'|’)re looking for|we are looking for|we need|you(?:'|’)ll have|you will have|you have)\s+/i,"")
+    .replace(/\s+/g," ")
+    .trim();
+  if(!clean)return "";
+  const boundary=clean.search(/\s+(?=(?:requirements?|qualifications?|responsibilities|benefits|compensation|how to apply|apply at|code merged|the change|don(?:'|’)t publish)\b)/i);
+  const section=boundary>=55?clean.slice(0,boundary):clean;
+  const point=(section.charAt(0).toUpperCase()+section.slice(1)).replace(/(?:…|\.{3})+$/g,"").replace(/[\s,;:]+$/g,"").trim();
+  return /[.!?]$/.test(point)?point:`${point}.`;
+}
+
+function distinctPoints(sentences:string[],pattern:RegExp,limit:number){
+  const seen=new Set<string>();
+  return sentences.filter(sentence=>pattern.test(sentence)).map(sentence=>concisePoint(sentence)).filter(point=>{
+    const key=point.toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+    if(!point||seen.has(key))return false;
+    seen.add(key);
+    return true;
+  }).slice(0,limit);
 }
 
 function analyseJob(job:Job,preferences:Preferences,profile:CandidateProfile){
@@ -102,14 +131,16 @@ function analyseJob(job:Job,preferences:Preferences,profile:CandidateProfile){
   if(!gaps.length)gaps.push("The listing does not reveal an obvious blocker, but confirm location eligibility and expected seniority before applying.");
 
   const sentences=[...new Map(description.split(/(?<=[.!?])\s+/).map(sentence=>sentence.replace(/\s+/g," ").trim()).filter(sentence=>sentence.length>35).map(sentence=>[sentence.toLowerCase().replace(/[^a-z0-9]+/g," ").trim(),sentence])).values()];
-  const requirementSentences=sentences.filter(sentence=>/(required|requirements|must|\d+\+? years?|proficien|familiar|strong (?:knowledge|skills)|experience (?:with|in)|ability to|comfortable (?:with|working)|you (?:have|bring|are))|we value/i.test(sentence));
-  const needs=[...new Set(requirementSentences.map(sentence=>cleanSentence(sentence)))].slice(0,4);
+  const needs=distinctPoints(sentences,/(required|requirements|must|\d+\+? years?|proficien|familiar|strong (?:knowledge|skills)|experience (?:with|in)|ability to|comfortable (?:with|working)|you (?:have|bring|are)|we value|qualification)/i,4);
   if(!needs.length){
-    if(job.skills.length)needs.push(`Technical skills mentioned: ${job.skills.join(", ")}.`);
-    needs.push(`${job.contract}; ${job.schedule.toLowerCase()}.`);
+    if(job.skills.length)needs.push(`Hands-on ability with ${job.skills.join(", ")}`);
+    needs.push(`${job.contract} availability and comfort working ${job.schedule.toLowerCase()}`);
   }
-  const about=cleanSentence(sentences.slice(0,2).join(" ")||job.summary,430);
-  return {matches:matches.slice(0,4),gaps:gaps.slice(0,4),needs:needs.slice(0,4),about};
+  const responsibilities=distinctPoints(sentences,/(you(?:'|’)ll|you will|responsibilit|day.to.day|build|develop|implement|design|maintain|collaborat|work (?:with|on)|create|deliver|own|support|improve|ship|lead)/i,4);
+  if(!responsibilities.length)responsibilities.push(`Contribute to ${job.focus.toLowerCase()} product development as a ${job.title}`);
+  const companySentence=sentences.find(sentence=>/(we (?:build|create|develop|provide|offer|help|enable|make)|our (?:product|platform|company|mission|customers)|is a |speciali[sz]es in|helps? .+ (?:to|with)|platform (?:for|that)|product (?:for|that))/i.test(sentence));
+  const company=concisePoint(companySentence||job.summary)||`${job.company} is hiring for a ${job.focus.toLowerCase()}-focused product role.`;
+  return {matches:matches.slice(0,4),gaps:gaps.slice(0,4),needs:needs.slice(0,4),responsibilities:responsibilities.slice(0,4),company};
 }
 
 function coverLetterFor(job:Job,profile:CandidateProfile,analysis:ReturnType<typeof analyseJob>){
@@ -125,7 +156,7 @@ async function extractCandidateProfile(file:File,current:CandidateProfile){
     text=result.value;
   }else if(file.name.toLowerCase().endsWith(".pdf")){
     const pdfjs=await import("pdfjs-dist/legacy/build/pdf.mjs");
-    pdfjs.GlobalWorkerOptions.workerSrc=pdfWorkerUrl;
+    pdfjs.GlobalWorkerOptions.workerSrc=new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs",import.meta.url).toString();
     const document=await pdfjs.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise;
     const pages:string[]=[];
     for(let pageNumber=1;pageNumber<=document.numPages;pageNumber++){
@@ -148,11 +179,13 @@ async function extractCandidateProfile(file:File,current:CandidateProfile){
   return {title,summary,skills:extractedSkills.length?extractedSkills.join(", "):current.skills,projects:projectLines.length?projectLines.join(", "):current.projects,languages:languageNames.length?languageNames.join(", "):current.languages};
 }
 
-const nav = [["Overview",LayoutDashboard],["Job matches",Compass],["Applications",BriefcaseBusiness],["Profile",CircleUserRound]] as const;
+const nav = [["Job matches",Compass],["Applications",BriefcaseBusiness],["Profile",CircleUserRound]] as const;
 
 export default function Home() {
   const [active,setActive] = useState("Job matches");
   const [selected,setSelected] = useState<Job|null>(null);
+  const [jobSummary,setJobSummary]=useState<JobSummary|null>(null);
+  const [summaryLoading,setSummaryLoading]=useState(false);
   const [query,setQuery] = useState("");
   const [focus,setFocus] = useState("All roles");
   const [saved,setSaved] = useState<number[]>([]);
@@ -165,17 +198,21 @@ export default function Home() {
   const [liveSources,setLiveSources] = useState<string[]>([]);
   const [searching,setSearching] = useState(false);
   const [lastLiveSearch,setLastLiveSearch] = useState("");
-  const [cloudStatus,setCloudStatus] = useState<CloudStatus>("checking");
-  const [cloudReady,setCloudReady] = useState(false);
   const [prepJob,setPrepJob] = useState<Job|null>(null);
   const [restoreJobId,setRestoreJobId] = useState<number|null>(null);
   const [localStateRestored,setLocalStateRestored] = useState(false);
   const [toast,setToast] = useState("");
+  useEffect(()=>{
+    if(!toast)return;
+    const timer=window.setTimeout(()=>setToast(""),5000);
+    return()=>window.clearTimeout(timer);
+  },[toast]);
   const [mobileNav,setMobileNav] = useState(false);
 
   useEffect(()=>{
     const storedPage=window.localStorage.getItem("matchpath-active-page");
-    if(storedPage&&["Overview","Job matches","Applications","Profile","Daily digest","Application prep"].includes(storedPage))setActive(storedPage);
+    if(storedPage==="Overview")setActive("Job matches");
+    else if(storedPage&&["Job matches","Applications","Profile","Daily digest","Application prep"].includes(storedPage))setActive(storedPage);
     const storedJobId=window.localStorage.getItem("matchpath-selected-job");if(storedJobId)setRestoreJobId(Number(storedJobId));
     const stored=window.localStorage.getItem("matchpath-statuses"); if(stored) setStatuses(JSON.parse(stored));
     const storedSaved=window.localStorage.getItem("matchpath-saved"); setSaved(storedSaved?JSON.parse(storedSaved):[2]);
@@ -183,20 +220,24 @@ export default function Home() {
     const storedProfile=window.localStorage.getItem("matchpath-candidate-profile"); if(storedProfile) setCandidateProfile(JSON.parse(storedProfile));
     const storedDigest=window.localStorage.getItem("matchpath-digest-settings"); if(storedDigest) setDigestSettings(JSON.parse(storedDigest));
     void refreshLiveJobs(false);
-    void loadCloudState();
     setLocalStateRestored(true);
   },[]);
   useEffect(()=>{if(localStateRestored)window.localStorage.setItem("matchpath-active-page",active)},[active,localStateRestored]);
   useEffect(()=>{if(localStateRestored&&selected)window.localStorage.setItem("matchpath-selected-job",String(selected.id))},[selected,localStateRestored]);
-  useEffect(()=>{
-    if(!cloudReady)return;
-    const timer=window.setTimeout(()=>void saveCloudState(),900);
-    return()=>window.clearTimeout(timer);
-  },[preferences,candidateProfile,digestSettings,saved,statuses,cloudReady]);
   const rankedJobs=useMemo(()=>liveJobs.filter(job=>passesHardFilters(job,preferences)).map(job=>{const analysis=analyseJob(job,preferences,candidateProfile);return {...job,isNew:newJobIds.includes(job.id),score:scoreJob(job,preferences,candidateProfile),matches:analysis.matches,gaps:analysis.gaps}}).sort((a,b)=>b.score-a.score),[preferences,candidateProfile,liveJobs,newJobIds]);
   const filtered=useMemo(()=>rankedJobs.filter(job=>`${job.title} ${job.company} ${job.skills.join(" ")}`.toLowerCase().includes(query.toLowerCase())&&(focus==="All roles"||job.focus===focus)),[query,focus,rankedJobs]);
   useEffect(()=>{setSelected(current=>current?(rankedJobs.find(job=>job.id===current.id)||current):current)},[rankedJobs]);
   useEffect(()=>{if(!rankedJobs.length)return;const restored=rankedJobs.find(job=>job.id===restoreJobId)||selected||rankedJobs[0];if(!selected)setSelected(restored);if(active==="Application prep"&&!prepJob)setPrepJob(restored)},[rankedJobs,restoreJobId,active,selected,prepJob]);
+  useEffect(()=>{
+    if(!selected){setJobSummary(null);return}
+    setJobSummary(null);setSummaryLoading(true);
+    const controller=new AbortController();
+    void requestJobSummary(selected,controller.signal)
+      .then(summary=>{if(summary)setJobSummary(summary)})
+      .catch(()=>{})
+      .finally(()=>setSummaryLoading(false));
+    return()=>controller.abort();
+  },[selected?.id]);
   function updateStatus(id:number,status:string){ const next={...statuses,[id]:status}; setStatuses(next); window.localStorage.setItem("matchpath-statuses",JSON.stringify(next)); if(!saved.includes(id)){const nextSaved=[...saved,id];setSaved(nextSaved);window.localStorage.setItem("matchpath-saved",JSON.stringify(nextSaved));} }
   function moveJob(id:number,status:string){ const next={...statuses}; if(status==="Saved") delete next[id]; else next[id]=status; setStatuses(next); window.localStorage.setItem("matchpath-statuses",JSON.stringify(next)); if(!saved.includes(id)){const nextSaved=[...saved,id];setSaved(nextSaved);window.localStorage.setItem("matchpath-saved",JSON.stringify(nextSaved));} }
   function toggleSaved(id:number){ const isRemoving=saved.includes(id); const next=isRemoving?saved.filter(savedId=>savedId!==id):[...saved,id]; setSaved(next); window.localStorage.setItem("matchpath-saved",JSON.stringify(next)); if(isRemoving){const nextStatuses={...statuses};delete nextStatuses[id];setStatuses(nextStatuses);window.localStorage.setItem("matchpath-statuses",JSON.stringify(nextStatuses));} setToast(isRemoving?"Job removed from Applications":"Job saved to Applications"); }
@@ -204,6 +245,22 @@ export default function Home() {
   function saveProfile(next:CandidateProfile){ setCandidateProfile(next); window.localStorage.setItem("matchpath-candidate-profile",JSON.stringify(next)); setToast("Profile and preferences saved"); }
   function saveDigest(next:DigestSettings){ setDigestSettings(next); window.localStorage.setItem("matchpath-digest-settings",JSON.stringify(next)); setToast("Daily Digest settings saved locally"); }
   async function extractCv(file:File){const extracted=await extractCandidateProfile(file,candidateProfile);setToast("CV extracted — review the fields and save your profile");return extracted;}
+  async function requestJobSummary(job:Job,signal?:AbortSignal){
+    const summaryKey=`matchpath-job-summary-v2-${job.id}`;
+    const cached=window.localStorage.getItem(summaryKey);
+    if(cached){try{return JSON.parse(cached) as JobSummary}catch{window.localStorage.removeItem(summaryKey)}}
+    const response=await fetch("/api/summarize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:job.id,company:job.company,title:job.title,description:job.originalDescription||job.summary}),signal});
+    if(!response.ok)return null;
+    const data=await response.json() as {summary?:JobSummary};
+    if(!data.summary)return null;
+    window.localStorage.setItem(summaryKey,JSON.stringify(data.summary));
+    return data.summary;
+  }
+  async function prepareTopSummaries(jobs:Job[],searchPreferences:Preferences){
+    const top=jobs.filter(job=>passesHardFilters(job,searchPreferences)).sort((a,b)=>scoreJob(b,searchPreferences,candidateProfile)-scoreJob(a,searchPreferences,candidateProfile)).slice(0,3);
+    setToast(`Found ${jobs.length} jobs · preparing ${top.length} quick summaries…`);
+    await Promise.all(top.map(job=>requestJobSummary(job).catch(()=>null)));
+  }
   function recordDiscoveredJobs(jobs:Job[],compareWithPrevious:boolean){
     const knownKey="matchpath-known-job-ids";const newKey="matchpath-new-job-ids";
     const storedKnown=window.localStorage.getItem(knownKey);const known:number[]=storedKnown?JSON.parse(storedKnown):[];
@@ -216,20 +273,23 @@ export default function Home() {
     const cacheKey=`matchpath-live-jobs-v4-${`${searchPreferences.roles}-${searchPreferences.location}`.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,140)}`;
     if(!force){const cached=window.localStorage.getItem(cacheKey);if(cached){try{const parsed=JSON.parse(cached);if(Date.now()-parsed.savedAt<6*60*60*1000&&parsed.jobs?.length){setLiveJobs(parsed.jobs);recordDiscoveredJobs(parsed.jobs,false);setLiveSources(parsed.sources||[]);setLastLiveSearch(parsed.fetchedAt);return}}catch{}}}
     setSearching(true);setToast("Searching live sources with your saved preferences…");
-    try{const roleQuery=encodeURIComponent(searchPreferences.roles);const locationQuery=encodeURIComponent(searchPreferences.location);const refreshQuery=force?`&refresh=${Date.now()}`:"";const response=await fetch(`/api/jobs?roles=${roleQuery}&locations=${locationQuery}${refreshQuery}`,force?{cache:"no-store"}:undefined);if(!response.ok)throw new Error("Live search is temporarily unavailable");const data=await response.json();if(data.jobs?.length){setLiveJobs(data.jobs);const newCount=recordDiscoveredJobs(data.jobs,true);setLiveSources(data.sources||[]);setLastLiveSearch(data.fetchedAt);window.localStorage.setItem(cacheKey,JSON.stringify({jobs:data.jobs,sources:data.sources||[],fetchedAt:data.fetchedAt,savedAt:Date.now()}));setToast(`${data.jobs.length} matches found${newCount?` · ${newCount} new`:" · no new jobs since your previous search"}`)}else{setLiveJobs([]);setLiveSources([]);setToast("No suitable live jobs found for the selected preferences right now")}}
+    try{
+      const roleQuery=encodeURIComponent(searchPreferences.roles);const locationQuery=encodeURIComponent(searchPreferences.location);const refreshQuery=force?`&refresh=${Date.now()}`:"";
+      const response=await fetch(`/api/jobs?roles=${roleQuery}&locations=${locationQuery}${refreshQuery}`,force?{cache:"no-store"}:undefined);
+      if(!response.ok)throw new Error("Live search is temporarily unavailable");
+      const data=await response.json() as {jobs?:Job[];sources?:string[];fetchedAt?:string};
+      if(data.jobs?.length){
+        await prepareTopSummaries(data.jobs,searchPreferences);
+        setLiveJobs(data.jobs);const newCount=recordDiscoveredJobs(data.jobs,true);setLiveSources(data.sources||[]);setLastLiveSearch(data.fetchedAt||new Date().toISOString());
+        window.localStorage.setItem(cacheKey,JSON.stringify({jobs:data.jobs,sources:data.sources||[],fetchedAt:data.fetchedAt,savedAt:Date.now()}));
+        setToast(`${data.jobs.length} matches and quick summaries ready${newCount?` · ${newCount} new`:""}`);
+      }else{setLiveJobs([]);setLiveSources([]);setToast("No suitable live jobs found for the selected preferences right now")}
+    }
     catch{setLiveJobs([]);setLiveSources([]);setToast("Live job sources are temporarily unavailable — please try again")}
     finally{setSearching(false)}
   }
-  async function loadCloudState(){
-    try{const response=await fetch("/api/state");if(response.status===401){setCloudStatus("signed-out");return}if(!response.ok)throw new Error();const data=await response.json();if(data.state){const state=data.state;const localPreferences=window.localStorage.getItem("matchpath-preferences");const localUpdatedAt=window.localStorage.getItem("matchpath-preferences-updated-at")||"";const cloudUpdatedAt=String(state.preferencesUpdatedAt||"");if(state.preferences&&(!localPreferences||cloudUpdatedAt>localUpdatedAt)){const merged=mergePreferences(state.preferences);setPreferences(merged);window.localStorage.setItem("matchpath-preferences",JSON.stringify(merged));if(cloudUpdatedAt)window.localStorage.setItem("matchpath-preferences-updated-at",cloudUpdatedAt)}if(state.candidateProfile){setCandidateProfile(state.candidateProfile);window.localStorage.setItem("matchpath-candidate-profile",JSON.stringify(state.candidateProfile))}if(state.digestSettings){setDigestSettings(state.digestSettings);window.localStorage.setItem("matchpath-digest-settings",JSON.stringify(state.digestSettings))}if(state.saved){setSaved(state.saved);window.localStorage.setItem("matchpath-saved",JSON.stringify(state.saved))}if(state.statuses){setStatuses(state.statuses);window.localStorage.setItem("matchpath-statuses",JSON.stringify(state.statuses))}}setCloudStatus("synced");setCloudReady(true)}
-    catch{setCloudStatus("error")}
-  }
-  async function saveCloudState(){
-    setCloudStatus("saving");
-    try{const preferencesUpdatedAt=window.localStorage.getItem("matchpath-preferences-updated-at")||new Date().toISOString();const response=await fetch("/api/state",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({preferences,preferencesUpdatedAt,candidateProfile,digestSettings,saved,statuses})});if(response.status===401){setCloudStatus("signed-out");return}if(!response.ok)throw new Error();setCloudStatus("synced")}
-    catch{setCloudStatus("error")}
-  }
   const selectedAnalysis=selected?analyseJob(selected,preferences,candidateProfile):null;
+  const displayedSummary=jobSummary?{company:jobSummary.companyDoes,purpose:jobSummary.jobPurpose,needs:jobSummary.requirements,responsibilities:jobSummary.dailyWork}:selectedAnalysis?{company:selectedAnalysis.company,purpose:`A ${selected?.focus.toLowerCase()}-focused ${selected?.title} role at ${selected?.company}.`,needs:selectedAnalysis.needs,responsibilities:selectedAnalysis.responsibilities}:null;
 
   return <main className="app-shell">
     <aside className={`sidebar ${mobileNav?"open":""}`}>
@@ -241,13 +301,30 @@ export default function Home() {
       <div className="sidebar-foot"><div className="profile-mini"><span>BC</span><div><strong>Beatrix</strong><small>Private workspace</small></div></div><div className="demo-note"><Sparkles size={16}/><p><strong>Live jobs only</strong><br/>Every listing links to its original source.</p></div></div>
     </aside>
     <section className="main-panel">
-      <header className="topbar"><button className="mobile-menu" onClick={()=>setMobileNav(true)} aria-label="Open menu"><span/><span/><span/></button><div className="mobile-brand">MatchPath</div><div className="top-actions">{cloudStatus==="signed-out"?<a className="cloud-pill sign-in" href="/signin-with-chatgpt?return_to=%2F" target="_top">Enable cloud sync</a>:<span className={`cloud-pill ${cloudStatus}`}><i/>{cloudStatus==="checking"?"Checking cloud":cloudStatus==="saving"?"Saving…":cloudStatus==="synced"?"Cloud synced":"Cloud unavailable"}</span>}<button className="icon-button" aria-label="Notifications"><Bell size={18}/><i/></button><button className="avatar">BC</button></div></header>
+      <header className="topbar"><button className="mobile-menu" onClick={()=>setMobileNav(true)} aria-label="Open menu"><span/><span/><span/></button><div className="mobile-brand">MatchPath</div><div className="top-actions"><span className="local-data-pill"><i/>Saved in this browser</span><button className="icon-button" aria-label="Notifications"><Bell size={18}/><i/></button><button className="avatar">BC</button></div></header>
       {active==="Job matches"?<div className="content">
         <section className="page-heading"><div><p className="eyebrow">YOUR OPPORTUNITIES</p><h1>Job matches</h1><p>Remote roles ranked against your experience, goals and working preferences.</p></div><button className="primary-button" disabled={searching} onClick={()=>void refreshLiveJobs(true)}><Sparkles size={17}/>{searching?"Searching…":"Find new matches"}</button></section>
         <section className="summary-strip"><div><span className="summary-icon lavender"><Target size={20}/></span><p><strong>{rankedJobs.length}</strong><small>Live matches</small></p></div><div><span className="summary-icon green"><Sparkles size={20}/></span><p><strong>{rankedJobs.filter(job=>job.score>=80).length}</strong><small>Strong matches</small></p></div><div><span className="summary-icon amber"><Clock3 size={20}/></span><p><strong>{lastLiveSearch?"Today":"Not yet"}</strong><small>Last search</small></p></div><p className="digest"><Check size={15}/> {liveSources.length?`Sources: ${liveSources.join(", ")}`:"Searching verified sources"}</p></section>
         <section className="toolbar"><label className="search"><Search size={18}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search roles, companies or skills"/></label><div className="filter-wrap"><Filter size={17}/><select value={focus} onChange={e=>setFocus(e.target.value)}><option>All roles</option><option>AI</option><option>Frontend</option><option>UI</option></select><ChevronDown size={15}/></div><button className="filter-button">Remote only <X size={14}/></button></section>
         <section className={`results-layout ${selected?"detail-open":""}`}><div className="job-list"><div className="list-heading"><span>{filtered.length} live matches</span><span>Sorted by best match</span></div>{filtered.map(job=><article key={job.id} className={`job-card ${selected?.id===job.id?"selected":""}`} onClick={()=>setSelected(job)}><div className="company-logo" style={{background:job.color}}>{job.logo}</div><div className="job-main"><div className="job-title-row"><div><h2>{job.title}</h2><p>{job.company}</p></div><button className={`heart ${saved.includes(job.id)?"saved":""}`} onClick={e=>{e.stopPropagation();toggleSaved(job.id)}} aria-label={saved.includes(job.id)?"Unsave job":"Save job"}><Heart size={18}/></button></div><div className="job-meta"><span><MapPin size={14}/>{job.location}</span><span>{job.contract}</span><span>{job.salary}</span></div><div className="job-bottom"><div>{job.isNew&&<span className="tag new-tag">New</span>}<span className={`score score-${job.score>=90?"high":job.score>=80?"medium":"low"}`}>{job.score}% match</span><span className="tag">{job.focus}</span><span className="tag source-tag">{job.source}</span>{statuses[job.id]&&<span className="tag status-tag">{statuses[job.id]}</span>}</div><small>{job.posted}</small></div></div></article>)}{!filtered.length&&<div className="empty"><Search size={24}/><strong>{searching?"Searching live job sources…":"No suitable live roles found"}</strong><p>{searching?"This can take a few seconds.":"Try a different filter or run a new search later."}</p></div>}</div>
-          {selected&&<aside className="job-detail"><div className="detail-top"><div className="company-logo large" style={{background:selected.color}}>{selected.logo}</div><button className="detail-close" onClick={()=>setSelected(null)}><X size={18}/></button></div><p className="detail-company">{selected.company}</p><h2>{selected.title}</h2><div className="detail-meta"><span><MapPin size={14}/>{selected.location}</span><span><Clock3 size={14}/>{selected.schedule}</span></div><div className="listing-actions"><a className="original-link" href={selected.sourceUrl} target="_blank" rel="noreferrer">Open original post <ArrowUpRight size={14}/></a></div><section className="role-summary"><h3>What this job is about</h3><p>{selectedAnalysis?.about}</p><h3>What they need</h3><ul>{selectedAnalysis?.needs.map(item=><li key={item}>{item}</li>)}</ul></section><div className="match-hero"><div className="score-ring" style={{"--score":`${selected.score*3.6}deg`} as React.CSSProperties}><span>{selected.score}<small>%</small></span></div><div><strong>{selected.score>=90?"Strong match":selected.score>=80?"Good match":"Possible match"}</strong><p>Based on your saved profile and preferences</p></div></div>{selected.matches.length>0&&<section className="reason-section"><h3>Why it fits</h3>{selected.matches.map(item=><p className="reason good" key={item}><Check size={15}/>{item}</p>)}</section>}{selected.gaps.length>0&&<section className="reason-section"><h3>Limitations to consider</h3>{selected.gaps.map(item=><p className="reason warn" key={item}><span>!</span>{item}</p>)}</section>}<div className="skill-row">{selected.skills.map(skill=><span key={skill}>{skill}</span>)}</div><div className="detail-actions"><button className="primary-button" onClick={()=>{updateStatus(selected.id,"Preparing");setPrepJob(selected);setActive("Application prep")}}>Prepare application <ArrowUpRight size={16}/></button><button className="secondary-button" onClick={()=>{updateStatus(selected.id,"Maybe");setToast("Moved to Maybe in Applications")}}>Maybe</button></div></aside>}
+          {selected&&<aside className="job-detail">
+            <div className="detail-top"><div className="company-logo large" style={{background:selected.color}}>{selected.logo}</div><button className="detail-close" onClick={()=>setSelected(null)}><X size={18}/></button></div>
+            <p className="detail-company">{selected.company}</p><h2>{selected.title}</h2>
+            <div className="detail-meta"><span><MapPin size={14}/>{selected.location}</span><span><Clock3 size={14}/>{selected.schedule}</span></div>
+            <div className="listing-actions"><a className="original-link" href={selected.sourceUrl} target="_blank" rel="noreferrer">Open original post <ArrowUpRight size={14}/></a></div>
+            <section className="role-summary">
+              {(summaryLoading||jobSummary)&&<div className={`summary-status ${jobSummary?"ready":""}`}>{summaryLoading?"Creating plain-English summary…":"AI summary ready"}</div>}
+              <h3>What the company does</h3><p>{displayedSummary?.company}</p>
+              <h3>What this job is</h3><p>{displayedSummary?.purpose}</p>
+              <h3>What you’ll do</h3><ul>{displayedSummary?.responsibilities.map(item=><li key={item}>{item}</li>)}</ul>
+              <h3>What they’re looking for</h3><ul>{displayedSummary?.needs.map(item=><li key={item}>{item}</li>)}</ul>
+            </section>
+            <div className="match-hero"><div className="score-ring" style={{"--score":`${selected.score*3.6}deg`} as React.CSSProperties}><span>{selected.score}<small>%</small></span></div><div><strong>{selected.score>=90?"Strong match":selected.score>=80?"Good match":"Possible match"}</strong><p>Based on your saved profile and preferences</p></div></div>
+            {selected.matches.length>0&&<section className="reason-section"><h3>Why it fits</h3>{selected.matches.map(item=><p className="reason good" key={item}><Check size={15}/>{item}</p>)}</section>}
+            {selected.gaps.length>0&&<section className="reason-section"><h3>Limitations to consider</h3>{selected.gaps.map(item=><p className="reason warn" key={item}><span>!</span>{item}</p>)}</section>}
+            <div className="skill-row">{selected.skills.map(skill=><span key={skill}>{skill}</span>)}</div>
+            <div className="detail-actions"><button className="primary-button" onClick={()=>{updateStatus(selected.id,"Preparing");setPrepJob(selected);setActive("Application prep")}}>Prepare application <ArrowUpRight size={16}/></button><button className="secondary-button" onClick={()=>{updateStatus(selected.id,"Maybe");setToast("Moved to Maybe in Applications")}}>Maybe</button></div>
+          </aside>}
         </section>
       </div>:active==="Application prep"&&prepJob?<ApplicationPrep job={prepJob} profile={candidateProfile} preferences={preferences} onBack={()=>setActive("Job matches")} onApplied={()=>{updateStatus(prepJob.id,"Applied");setToast("Application marked as applied");setActive("Applications")}}/>:<PlaceholderPage active={active} statuses={statuses} saved={saved} toggleSaved={toggleSaved} moveJob={moveJob} preferences={preferences} savePreferences={savePreferences} candidateProfile={candidateProfile} saveProfile={saveProfile} extractCv={extractCv} digestSettings={digestSettings} saveDigest={saveDigest} matchingJobs={rankedJobs} navigate={setActive} reviewJob={job=>{setSelected(job);setActive("Job matches")}} findMatches={()=>void refreshLiveJobs(true)}/>} 
       {toast&&<button className="toast" onClick={()=>setToast("")} aria-live="polite"><Check size={16}/>{toast}<X size={14}/></button>}
@@ -273,12 +350,16 @@ function ApplicationPrep({job,profile,preferences,onBack,onApplied}:{job:Job;pro
 }
 
 function ChipField({label,help,value,options,onChange,tone="default"}:{label:string;help:string;value:string;options:string[];onChange:(value:string)=>void;tone?:"default"|"low"|"avoid"}){
-  const [custom,setCustom]=useState("");
+  const dropdownRef=useRef<HTMLDetailsElement>(null);
   const selected=value.split(",").map(item=>item.trim()).filter(Boolean);
   const displayed=[...options,...selected.filter(item=>!options.some(option=>option.toLowerCase()===item.toLowerCase()))];
   const toggle=(option:string)=>onChange(selected.some(item=>item.toLowerCase()===option.toLowerCase())?selected.filter(item=>item.toLowerCase()!==option.toLowerCase()).join(", "):[...selected,option].join(", "));
-  const addCustom=()=>{const next=custom.trim();if(next&&!selected.some(item=>item.toLowerCase()===next.toLowerCase()))onChange([...selected,next].join(", "));setCustom("")};
-  return <div className={`preference-field ${tone}`}><div><strong>{label}</strong><p>{help}</p></div><div className="chip-options">{displayed.map(option=><button type="button" key={option} className={selected.some(item=>item.toLowerCase()===option.toLowerCase())?"selected":""} onClick={()=>toggle(option)}>{selected.some(item=>item.toLowerCase()===option.toLowerCase())&&<Check size={12}/>} {option}</button>)}</div><div className="custom-option"><input value={custom} onChange={event=>setCustom(event.target.value)} onKeyDown={event=>{if(event.key==="Enter"){event.preventDefault();addCustom()}}} placeholder="Add a custom option"/><button type="button" onClick={addCustom}>Add</button></div></div>;
+  useEffect(()=>{
+    const closeOnOutsideClick=(event:PointerEvent)=>{if(dropdownRef.current&&!dropdownRef.current.contains(event.target as Node))dropdownRef.current.removeAttribute("open")};
+    document.addEventListener("pointerdown",closeOnOutsideClick);
+    return()=>document.removeEventListener("pointerdown",closeOnOutsideClick);
+  },[]);
+  return <div className={`preference-field ${tone}`}><div><strong>{label}</strong><p>{help}</p></div><details ref={dropdownRef} className="preference-select"><summary>{selected.length?`${selected.length} selected`:"Choose options"}<ChevronDown size={16}/></summary><div className="preference-menu">{displayed.map(option=><button type="button" key={option} className={selected.some(item=>item.toLowerCase()===option.toLowerCase())?"selected":""} onClick={()=>toggle(option)}>{selected.some(item=>item.toLowerCase()===option.toLowerCase())&&<Check size={14}/>}<span>{option}</span></button>)}</div></details></div>;
 }
 
 function PreferenceBuilder({draft,setDraft}:{draft:Preferences;setDraft:(next:Preferences)=>void}){
@@ -298,9 +379,9 @@ function PlaceholderPage({active,statuses,saved,toggleSaved,moveJob,preferences,
   useEffect(()=>setDigestDraft(digestSettings),[digestSettings]);
   const profileDirty=JSON.stringify(draft)!==JSON.stringify(preferences)||JSON.stringify(profileDraft)!==JSON.stringify(candidateProfile);
   const commitProfile=()=>{savePreferences(draft);saveProfile(profileDraft)};
-  const descriptions:Record<string,string>={Overview:"A focused snapshot of your search progress and strongest opportunities.",Applications:"Track every role from first look to application, interview and offer.",Profile:"The experience MatchPath uses to explain every score.",Preferences:"Control which jobs MatchPath prioritises and how it evaluates them.","Daily digest":"Choose how MatchPath should summarize new opportunities."};
+  const descriptions:Record<string,string>={Applications:"Track every role from first look to application, interview and offer.",Profile:"The experience MatchPath uses to explain every score.",Preferences:"Control which jobs MatchPath prioritises and how it evaluates them.","Daily digest":"Choose how MatchPath should summarize new opportunities."};
   return <div className="content placeholder-page"><section className="page-heading"><div><p className="eyebrow">MATCHPATH</p><h1>{active}</h1><p>{descriptions[active]}</p></div></section>{active==="Profile"&&<div className={`profile-save-status ${profileDirty?"dirty":"saved"}`}><div><Check size={16}/><p><strong>{profileDirty?"You have unsaved changes":"All changes saved"}</strong><span>{profileDirty?"Your selections are only a draft until you save them.":"Your saved preferences are being used for job search and matching."}</span></p></div>{profileDirty&&<div><button type="button" className="secondary-button" onClick={()=>{setProfileDraft(candidateProfile);setDraft(preferences)}}>Cancel</button><button type="button" className="primary-button" onClick={commitProfile}><Check size={15}/>Save changes</button></div>}</div>}{active==="Profile"&&<PreferenceBuilder draft={draft} setDraft={setDraft}/>}
-    {active==="Profile"?<form className="combined-profile-form" onSubmit={e=>{e.preventDefault();savePreferences(draft);saveProfile(profileDraft)}}><section><div className="form-section-heading"><div><p className="eyebrow">FROM YOUR CV</p><h2>Candidate profile</h2><p>Upload a PDF, DOCX or TXT CV. Extraction happens locally in your browser.</p></div><div className="cv-controls"><span className="cv-source">{cvName}</span><label className={`upload-cv ${extracting?"disabled":""}`}><input type="file" accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" disabled={extracting} onChange={async e=>{const file=e.target.files?.[0];if(!file)return;setExtracting(true);setExtractMessage("");try{setProfileDraft(await extractCv(file));setCvName(file.name);setExtractMessage("Information extracted. Review the fields, then save your profile.")}catch(error){setExtractMessage(error instanceof Error?error.message:"The CV could not be read. Scanned PDFs without selectable text are not supported yet.")}finally{setExtracting(false);e.target.value=""}}}/><span>{extracting?"Extracting…":"Upload updated CV"}</span></label></div></div>{extractMessage&&<p className="extract-message">{extractMessage}</p>}<div className="form-grid"><label><span>Professional title</span><input value={profileDraft.title} onChange={e=>setProfileDraft({...profileDraft,title:e.target.value})}/></label><label className="wide"><span>Professional summary</span><textarea value={profileDraft.summary} onChange={e=>setProfileDraft({...profileDraft,summary:e.target.value})}/></label><label className="wide"><span>Skills</span><textarea value={profileDraft.skills} onChange={e=>setProfileDraft({...profileDraft,skills:e.target.value})}/></label><label><span>Projects</span><textarea value={profileDraft.projects} onChange={e=>setProfileDraft({...profileDraft,projects:e.target.value})}/></label><label><span>Languages</span><textarea value={profileDraft.languages} onChange={e=>setProfileDraft({...profileDraft,languages:e.target.value})}/></label></div></section><section><div className="form-section-heading"><div><p className="eyebrow">MATCHING RULES</p><h2>Job-search preferences</h2><p>Saving these values immediately recalculates and reorders your matches.</p></div></div><div className="form-grid">{([ ["roles","Target roles"],["industries","Preferred industries"],["location","Location and remote rules"],["hours","Working hours"],["salary","Salary preference"],["contract","Contract preference"] ] as [keyof Preferences,string][]).map(([key,label])=><label key={key}><span>{label}</span><textarea value={draft[key]} onChange={e=>setDraft({...draft,[key]:e.target.value})}/></label>)}</div></section><div className="profile-save-bar"><p>Save to apply the updated profile and recalculate every match.</p><div><button type="button" className="secondary-button" onClick={()=>{setProfileDraft(candidateProfile);setDraft(preferences)}}>Cancel changes</button><button className="primary-button" type="submit"><Check size={16}/>Save and update matches</button></div></div></form>
+    {active==="Profile"?<form className="combined-profile-form" onSubmit={e=>{e.preventDefault();savePreferences(draft);saveProfile(profileDraft)}}><section><div className="form-section-heading"><div><p className="eyebrow">FROM YOUR CV</p><h2>Candidate profile</h2><p>Upload a PDF, DOCX or TXT CV. Extraction happens locally in your browser.</p></div><div className="cv-controls"><span className="cv-source">{cvName}</span><label className={`upload-cv ${extracting?"disabled":""}`}><input type="file" accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" disabled={extracting} onChange={async e=>{const file=e.target.files?.[0];if(!file)return;setExtracting(true);setExtractMessage("");try{setProfileDraft(await extractCv(file));setCvName(file.name);setExtractMessage("Information extracted. Review the fields, then save your profile.")}catch(error){setExtractMessage(error instanceof Error?error.message:"The CV could not be read. Scanned PDFs without selectable text are not supported yet.")}finally{setExtracting(false);e.target.value=""}}}/><span>{extracting?"Extracting…":"Upload updated CV"}</span></label></div></div>{extractMessage&&<p className="extract-message">{extractMessage}</p>}<div className="form-grid"><label><span>Professional title</span><input value={profileDraft.title} onChange={e=>setProfileDraft({...profileDraft,title:e.target.value})}/></label><label className="wide"><span>Professional summary</span><textarea value={profileDraft.summary} onChange={e=>setProfileDraft({...profileDraft,summary:e.target.value})}/></label><label className="wide"><span>Skills</span><textarea value={profileDraft.skills} onChange={e=>setProfileDraft({...profileDraft,skills:e.target.value})}/></label><label><span>Projects</span><textarea value={profileDraft.projects} onChange={e=>setProfileDraft({...profileDraft,projects:e.target.value})}/></label><label><span>Languages</span><textarea value={profileDraft.languages} onChange={e=>setProfileDraft({...profileDraft,languages:e.target.value})}/></label></div></section><div className="profile-save-bar"><p>Save to apply the selected preferences and recalculate every match.</p><div><button type="button" className="secondary-button" onClick={()=>{setProfileDraft(candidateProfile);setDraft(preferences)}}>Cancel changes</button><button className="primary-button" type="submit"><Check size={16}/>Save and update matches</button></div></div></form>
     :active==="Applications"?<><p className="board-help">Drag jobs between columns, or use the stage menu on each card. Unclick the heart to remove a job from Applications.</p><div className="kanban">{["Saved","Maybe","Preparing","Applied","Interview"].map(column=>{const columnJobs=matchingJobs.filter(job=>column==="Saved"?saved.includes(job.id)&&!statuses[job.id]:saved.includes(job.id)&&statuses[job.id]===column);return <div className={`kanban-col ${dragging!==null?"drag-active":""}`} key={column} onDragOver={e=>e.preventDefault()} onDrop={()=>{if(dragging!==null)moveJob(dragging,column);setDragging(null)}}><h3>{column}<span>{columnJobs.length}</span></h3>{columnJobs.map(job=><article key={job.id} draggable onDragStart={()=>setDragging(job.id)} onDragEnd={()=>setDragging(null)} className={dragging===job.id?"dragging":""}><div className="application-card-title"><strong>{job.title}</strong><button onClick={()=>toggleSaved(job.id)} aria-label="Unsave job" title="Remove from Applications"><Heart size={15} fill="currentColor"/></button></div><p>{job.company}</p><div className="application-card-bottom"><span>{job.score}% match</span><select aria-label={`Move ${job.title}`} value={column} onChange={e=>moveJob(job.id,e.target.value)}>{["Saved","Maybe","Preparing","Applied","Interview"].map(stage=><option key={stage}>{stage}</option>)}</select></div></article>)}{!columnJobs.length&&<p className="column-empty">Drop a job here</p>}</div>})}</div></>
     :active==="Daily digest"?<form className="digest-settings-form" onSubmit={e=>{e.preventDefault();saveDigest(digestDraft)}}><section className="digest-status"><div className="digest-status-copy"><span className="summary-icon lavender"><Bell size={20}/></span><div><h2>Job match digest</h2><p>Choose when and which matches should appear in your email summary.</p></div></div><label className="toggle-row"><input type="checkbox" checked={digestDraft.enabled} onChange={e=>setDigestDraft({...digestDraft,enabled:e.target.checked})}/><span className="toggle-track"><i/></span><b>{digestDraft.enabled?"Enabled":"Disabled"}</b></label></section><section className="digest-form-grid"><label><span>Frequency</span><select value={digestDraft.frequency} onChange={e=>setDigestDraft({...digestDraft,frequency:e.target.value as "Daily"|"Weekly"})}><option>Daily</option><option>Weekly</option></select></label><label><span>Delivery time</span><input type="time" value={digestDraft.time} onChange={e=>setDigestDraft({...digestDraft,time:e.target.value})}/></label><label><span>Timezone</span><select value={digestDraft.timezone} onChange={e=>setDigestDraft({...digestDraft,timezone:e.target.value})}><option>Europe/Athens</option><option>Europe/Lisbon</option><option>Europe/London</option><option>Asia/Hong_Kong</option></select></label><label><span>Minimum match score</span><div className="range-field"><input type="range" min="50" max="95" step="5" value={digestDraft.minScore} onChange={e=>setDigestDraft({...digestDraft,minScore:Number(e.target.value)})}/><b>{digestDraft.minScore}%+</b></div></label><label><span>Maximum jobs per digest</span><select value={digestDraft.maxJobs} onChange={e=>setDigestDraft({...digestDraft,maxJobs:Number(e.target.value)})}><option value="3">3 jobs</option><option value="5">5 jobs</option><option value="10">10 jobs</option></select></label><label><span>Delivery email</span><input type="email" placeholder="you@example.com" value={digestDraft.email} onChange={e=>setDigestDraft({...digestDraft,email:e.target.value})}/></label><label className="check-field wide"><input type="checkbox" checked={digestDraft.newOnly} onChange={e=>setDigestDraft({...digestDraft,newOnly:e.target.checked})}/><span>Include only newly discovered jobs</span></label></section><section className="digest-not-connected"><div><strong>Email delivery is not connected yet</strong><p>Your choices are saved locally. Live scheduled delivery will be activated after real job sources and private cloud storage are connected.</p></div><span>Settings only</span></section><div className="digest-actions"><button type="button" className="secondary-button" onClick={()=>setDigestDraft(digestSettings)}>Cancel changes</button><button type="submit" className="primary-button"><Check size={16}/>Save digest settings</button></div></form>
     :<div className="overview-job-search"><section className="search-status-card"><div><span className="summary-icon green"><Check size={20}/></span><div><p className="eyebrow">SEARCH STATUS</p><h2>{matchingJobs.length?"Live search complete":"No suitable live jobs yet"}</h2><p>{matchingJobs.length?`${matchingJobs.length} verified listings ranked against your profile`:"Run another search later — no fictional jobs will be shown"}</p></div></div><button className="secondary-button" onClick={findMatches}><Sparkles size={15}/>Find new matches</button></section><section className="strong-matches"><div className="section-heading"><div><p className="eyebrow">80% MATCH OR HIGHER</p><h2>Strong matches</h2><p>The three most relevant recent opportunities for your saved profile.</p></div><button onClick={()=>navigate("Job matches")}>View all matches <ArrowUpRight size={14}/></button></div><div className="overview-match-list">{matchingJobs.filter(job=>job.score>=80).slice(0,3).map(job=><article key={job.id}><div className="company-logo" style={{background:job.color}}>{job.logo}</div><div className="overview-match-copy"><p>{job.company}</p><h3>{job.title}</h3><div><span><MapPin size={13}/>{job.location}</span><span>{job.salary}</span><span>{job.contract}</span></div></div><span className="score score-high">{job.score}% match</span><button className="secondary-button" onClick={()=>reviewJob(job)}>Review match <ArrowUpRight size={14}/></button></article>)}</div></section></div>}
