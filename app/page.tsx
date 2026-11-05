@@ -37,12 +37,16 @@ function scoreJob(job:Job,preferences:Preferences,profile:CandidateProfile){
   const industries=preferences.industries.toLowerCase();
   const lowPriority=preferences.lowPriorityIndustries.toLowerCase();
   const avoided=preferences.avoidedIndustries.toLowerCase();
+  const seniority=preferences.seniority.toLowerCase();
   const skills=profile.skills.toLowerCase();
   let score=20;
   if(job.focus==="AI"&&roles.includes("ai"))score+=18;
   if(job.title.toLowerCase().includes("frontend")&&roles.includes("frontend"))score+=15;
   if(job.focus==="UI"&&roles.includes("ui"))score+=15;
   if(job.title.toLowerCase().includes("junior"))score+=5;
+  const levelText=`${job.title} ${job.originalDescription||""}`.toLowerCase();
+  if(seniority.includes("junior")&&/\b(junior|entry.?level|graduate|intern)\b/.test(levelText))score+=8;
+  if(seniority.includes("mid-level")&&/\b(mid.?level|intermediate)\b/.test(levelText))score+=6;
   const industryText=`${job.title} ${job.summary} ${job.originalDescription||""}`.toLowerCase();
   if(industryText.split(/\W+/).some(word=>word.length>3&&industries.includes(word)))score+=12;
   if(industryText.split(/\W+/).some(word=>word.length>3&&lowPriority.includes(word)))score-=6;
@@ -202,8 +206,8 @@ export default function Home() {
   async function refreshLiveJobs(force:boolean,searchPreferences=preferences){
     const cacheKey=`matchpath-live-jobs-v4-${`${searchPreferences.roles}-${searchPreferences.location}`.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,140)}`;
     if(!force){const cached=window.localStorage.getItem(cacheKey);if(cached){try{const parsed=JSON.parse(cached);if(Date.now()-parsed.savedAt<6*60*60*1000&&parsed.jobs?.length){setLiveJobs(parsed.jobs);setLiveSources(parsed.sources||[]);setLastLiveSearch(parsed.fetchedAt);return}}catch{}}}
-    setSearching(true);
-    try{const roleQuery=encodeURIComponent(searchPreferences.roles);const locationQuery=encodeURIComponent(searchPreferences.location);const response=await fetch(`/api/jobs?roles=${roleQuery}&locations=${locationQuery}`);if(!response.ok)throw new Error("Live search is temporarily unavailable");const data=await response.json();if(data.jobs?.length){setLiveJobs(data.jobs);setLiveSources(data.sources||[]);setLastLiveSearch(data.fetchedAt);window.localStorage.setItem(cacheKey,JSON.stringify({jobs:data.jobs,sources:data.sources||[],fetchedAt:data.fetchedAt,savedAt:Date.now()}));setToast(`${data.jobs.length} location-compatible jobs loaded from ${(data.sources||[]).join(", ")}`)}else{setLiveJobs([]);setLiveSources([]);setToast("No suitable live jobs found for the selected locations right now")}}
+    setSearching(true);setToast("Searching live sources with your saved preferences…");
+    try{const roleQuery=encodeURIComponent(searchPreferences.roles);const locationQuery=encodeURIComponent(searchPreferences.location);const refreshQuery=force?`&refresh=${Date.now()}`:"";const response=await fetch(`/api/jobs?roles=${roleQuery}&locations=${locationQuery}${refreshQuery}`,force?{cache:"no-store"}:undefined);if(!response.ok)throw new Error("Live search is temporarily unavailable");const data=await response.json();if(data.jobs?.length){setLiveJobs(data.jobs);setLiveSources(data.sources||[]);setLastLiveSearch(data.fetchedAt);window.localStorage.setItem(cacheKey,JSON.stringify({jobs:data.jobs,sources:data.sources||[],fetchedAt:data.fetchedAt,savedAt:Date.now()}));setToast(`${data.jobs.length} matches found using your saved roles and locations`)}else{setLiveJobs([]);setLiveSources([]);setToast("No suitable live jobs found for the selected preferences right now")}}
     catch{setLiveJobs([]);setLiveSources([]);setToast("Live job sources are temporarily unavailable — please try again")}
     finally{setSearching(false)}
   }

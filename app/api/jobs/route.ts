@@ -152,6 +152,7 @@ async function leverJobs(site: string,roles:string[],locations:string[]) {
 
 export async function GET(request:Request) {
   const params=new URL(request.url).searchParams;
+  const forceRefresh=params.has("refresh");
   const roles=(params.get("roles")||"").split(",").map(value=>value.trim()).filter(Boolean);
   const locations=(params.get("locations")||"").split(",").map(value=>value.trim().toLowerCase()).filter(Boolean);
   const tasks = [remotiveJobs(roles,locations), ...jobicyGeos(locations).map(geo=>jobicyJobs(roles,locations,geo)), ...GREENHOUSE_BOARDS.map(board=>greenhouseJobs(board,roles,locations)), ...LEVER_SITES.map(site=>leverJobs(site,roles,locations))];
@@ -160,5 +161,5 @@ export async function GET(request:Request) {
   const unique = [...new Map(jobs.map(job => [`${job.company.toLowerCase()}|${job.title.toLowerCase()}`, job])).values()].sort((a,b)=>eligibilityPriority(a.location)-eligibilityPriority(b.location)).slice(0, 80);
   const sources = [...new Set(unique.map(job => job.source))];
   if (!unique.length) return Response.json({ jobs: [], sources: [], error: "No suitable live jobs were returned by the connected sources." }, { status: 503 });
-  return Response.json({ jobs: unique, sources, fetchedAt: new Date().toISOString() }, { headers: { "Cache-Control": "public, max-age=900, s-maxage=21600" } });
+  return Response.json({ jobs: unique, sources, fetchedAt: new Date().toISOString() }, { headers: { "Cache-Control": forceRefresh?"no-store":"public, max-age=900, s-maxage=21600" } });
 }
